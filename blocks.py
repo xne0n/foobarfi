@@ -332,13 +332,24 @@ evaluate.add_option(
 evaluate.add_option(name="textarea-option", type="textarea")
 evaluate.add_compute(eval_code_func)
 
-
+test_all_options2 = (
+    Block(name="All Options 2", 
+          block_display_type="descBlock",
+          header_color="#FF0000"
+    ).add_option(name="display-option", type="display", value="This is a 2 with all options.")
+    .add_option(name="input-option", type="input")
+    .add_option(name="integer-option", type="integer")
+    .add_option(name="number-option", type="number")
+    .add_option(name="checkbox-option", type="checkbox")
+    .add_option(name="select-option", type="select", items=["Select 2", "Select 2B", "Select C"])
+    .add_option(name="slider-option", type="slider", min=0, max=10)
+)
 
 base_blocks = {
     "Math": math_blocks,
     "Process": process_blocks,
     "Options": options_blocks,
     "Exec": [execution, evaluate],
-    "Test": [test_all_options, test_input, test_output],
+    "Test": [test_all_options2, test_input, test_output],
 }
 
