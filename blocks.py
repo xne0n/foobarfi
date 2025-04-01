@@ -1,6 +1,6 @@
 from barfi.flow import Block
 import asyncio
-
+import streamlit as st
 
 def number_10_func(self):
     self.set_interface(name="Output 1", value=10)
@@ -274,8 +274,10 @@ options_blocks = [input, textarea, integer, number, checkbox, selecto, mutlisele
 test_all_options = Block(name="All Options")
 test_all_options.add_input()
 test_all_options.add_output()
+
+# Add various options
 test_all_options.add_option(
-    name="display-option", type="display", value="This is a Block with all options."
+    name="display-option", type="display", value="This is a vvvvBlock with all options."
 )
 test_all_options.add_option(name="input-option", type="input")
 test_all_options.add_option(name="integer-option", type="integer")
@@ -285,6 +287,10 @@ test_all_options.add_option(
     name="select-option", type="select", items=["Select A", "Select B", "Select C"]
 )
 test_all_options.add_option(name="slider-option", type="slider", min=0, max=10)
+
+# Add a dedicated bloc-description using the dedicated function.
+test_all_options.add_description(value="This is the bloc-description for All Options block.")
+
 
 test_input = Block(name="Example Input")
 test_input.add_output()
@@ -337,19 +343,94 @@ test_all_options2 = (
           block_display_type="descBlock",
           header_color="#FF0000"
     ).add_option(name="display-option", type="display", value="This is a 2 with all options.")
-    .add_option(name="input-option", type="input")
+    .add_option(name="input option", type="input", hint="This is a hint for the input option.")
     .add_option(name="integer-option", type="integer")
     .add_option(name="number-option", type="number")
     .add_option(name="checkbox-option", type="checkbox")
     .add_option(name="select-option", type="select", items=["Select 2", "Select 2B", "Select C"])
+    .add_option(name="multiselect-option", type="multiselect", items=[f"Select {chr(i)}" for i in range(65, 91)])
     .add_option(name="slider-option", type="slider", min=0, max=10)
 )
+
+
+dicto = {
+    "prout": {
+        "label": "Select a proutage",
+        "items": {
+            "Key1": {
+                "label": "Select a Key1",
+                "items": ["Item1 for Key1", "Item2 for Key1", "Item3 for Key1", "Item4 for Key1", "Item5 for Key1"]
+            },
+            "Key2": {
+                "label": "Select a Key2",
+                "items": ["Item1 for Key2", "Item2 for Key2", "Item3 for Key2", "Item4 for Key2", "Item5 for Key2"]
+            },
+            "Key3": {
+                "label": "Select a Key3",
+                "items": ["Item1 for Key3", "Item2 for Key3", "Item3 for Key3", "Item4 for Key3", "Item5 for Key3"]
+            },
+            "Key4": {
+                "label": "Select a Key4",
+                "items": ["Item1 for Key4", "Item2 for Key4", "Item3 for Key4", "Item4 for Key4", "Item5 for Key4"]
+            },
+            "Key5": {
+                "label": "Select a Key5",
+                "items": ["Item1 for Key5", "Item2 for Key5", "Item3 for Key5", "Item4 for Key5", "Item5 for Key5"]
+            }
+        }
+    }
+}
+
+test_filter_select = (
+    Block(name="Filter Select", 
+          block_display_type="descBlock",
+          header_color="#00F0FF"
+    ).add_option(name="filter-option", type="filterselect", dictionary= dicto)
+)
+
+# Create a database reader block using the new format with story template
+db_reader = Block.from_story_template({
+    "name": "Read Database",
+    "ico": "Storage",
+    "header_color": "#2196f3",
+    "story_template": "Read data from [database] with [query]",
+    "inputs": [{"name": "Connection"}],
+    "outputs": [{"name": "Result"}],
+    "options": [
+        {
+            "name": "[database]",
+            "type": "select",
+            "items": ["MySQL", "PostgreSQL", "MongoDB"],
+            "value": "MySQL",
+            "hint": "Select your database type"
+        },
+        {
+            "name": "[query]",
+            "type": "input",
+            "value": "SELECT * FROM users",
+            "hint": "Enter SQL query or other database command"
+        }
+    ]
+})
+
+
+def db_read_func(self):
+    # Placeholder compute logic
+    db = self.get_option('[database]')
+    query = self.get_option('[query]')
+    print(f"Reading from {db} database with query: {query}")
+    # In a real scenario, you would perform the database read
+    # and return the data through the output interface
+    self.set_interface(name="Result", value=f"Data from {db} using query: {query}")
+
+# Add compute function to the block
+db_reader.add_compute(db_read_func)
 
 base_blocks = {
     "Math": math_blocks,
     "Process": process_blocks,
     "Options": options_blocks,
     "Exec": [execution, evaluate],
-    "Test": [test_all_options2, test_input, test_output],
+    "Data": [db_reader],  # Database reader block
+    "Test": [test_all_options2, test_all_options, test_filter_select, test_output]
 }
-
