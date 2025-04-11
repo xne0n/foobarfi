@@ -408,8 +408,9 @@ def parse_all_paths(flow_schema: FlowSchema) -> str:
                  should_end_here = True; end_type = "linear_to_junction"; ends_at_junction_id = next_node_id; via_interface = next_conn['from_interface'] if next_conn else None
             elif next_node_id in visited_in_this_trace: # Cycle detected
                  should_end_here = True; end_type = "linear_cycle"
-            elif next_node_id in processed_nodes: # Reaches node processed by another path
-                 should_end_here = True; end_type = "linear_reaches_processed"; ends_at_junction_id = next_node_id # End before overlap
+            elif next_node_id in processed_nodes: # Reached node already covered by another path
+                 # End the path here, connection will be made later if needed
+                 should_end_here = True; end_type = "linear_reaches_processed"; ends_at_junction_id = next_node_id # Treat like junction end for connection logic
 
             # --- Store path if ending --- 
             if should_end_here:
@@ -582,100 +583,154 @@ def parse_all_paths(flow_schema: FlowSchema) -> str:
         if len(input_details) == 2: return f'Using {input_details[0]} and {input_details[1]}: '
         return f'Using {", ".join(input_details[:-1])}, and {input_details[-1]}: '
 
-    current_section_label = None # Track the active section label printed
-
-    # Iterate through final sorted paths
+    # Group threads by section for nested hierarchy
+    section_threads = {}  # Map section_label -> list of thread_info
+    section_order = []    # Keep track of section display order
+    standalone_threads = []  # Threads not associated with any section
+    
+    # First pass: organize threads by their associated sections
     for path_info in complete_paths:
-        step_thread_id = path_info["id"]
-        path_type = path_info["type"]
         path_nodes = path_info["path"]
-        is_junction_path = path_type in ["merge_node", "branch_node", "merge_and_branch_node"]
-
-        if not path_nodes: continue
-
+        if not path_nodes:
+            continue
+            
+        # Determine if this thread belongs to a section
         first_node_id = path_nodes[0]
-
-        # --- Section Header Handling --- 
-        section_header_printed_for_this_thread = False
-        # Check if the first node of this path starts a new section
+        section_label = None
+        
+        # Check if the first node is a section
         if first_node_id in section_nodes:
             section_data = nodes_dict[first_node_id]
-            # Print section header only if it's different from the last one printed
-            if section_data.label != current_section_label:
-                current_section_label = section_data.label
-                output_lines.append(f"\n=== Section: {current_section_label} ===")
-            section_header_printed_for_this_thread = True # Mark that header was handled (or was same)
-
-            # If this path IS the section node itself (e.g., a junction section)
+            section_label = section_data.label
+            
+            # Skip threads that are just section nodes themselves
             if len(path_nodes) == 1:
-                # Add connections if this section/junction leads anywhere
-                if step_thread_id in path_connections:
-                    to_paths = path_connections[step_thread_id]["to_paths"]
-                    if to_paths:
-                        # Print under the Section header
-                        output_lines.append("   Starts Step Thread(s):") 
-                        sorted_connections = sorted(to_paths, key=lambda x: x['path_id'])
-                        for conn in sorted_connections:
-                            output_lines.append(f"   - Step Thread {conn['path_id']} (via {conn['interface']} interface)")
-                continue # Done with this section-junction path
-
-
-        # --- Output Path Header --- 
-        # Only print Step Thread header if it's not *just* a section header path
-        # (The check `first_node_id in section_nodes and len(path_nodes) == 1` handles this case above)
-        output_lines.append(f"\n=== Step Thread {step_thread_id} ===")
-
-
-        # --- Format Steps within the Path --- 
-        step_number = 1 # Reset step number for each new thread
-        start_index = 0 
-        # If the first node was a section and we printed its header, skip it in steps
-        if section_header_printed_for_this_thread:
-             start_index = 1 
-
-        for i in range(start_index, len(path_nodes)):
-            node_id = path_nodes[i]
-            node_data = nodes_dict[node_id]
-
-            # Check for subsequent inline Section nodes
-            # (This case might be less likely now, but keep for robustness)
-            if node_id in section_nodes:
-                 if node_data.label != current_section_label:
-                     current_section_label = node_data.label
-                     output_lines.append(f"\n--- Section: {current_section_label} ---")
-                     step_number = 1 # Reset step numbering
-                 continue # Do not print section as a numbered step
-
-            # Format regular step or junction step
-            template = node_data.filled_story_template or f"Node {node_data.name} ({node_id})"
-            # Get input info based on global connections, excluding sections
-            all_incoming = incoming_connections.get(node_id, [])
-            input_info_str = format_input_info(node_id, step_thread_id, all_incoming)
-
-            # Format and add the step line
-            formatted_step = template.strip()
-            if formatted_step and not formatted_step.endswith(('.', '?', '!')):
-                formatted_step += '.'
-            formatted_step = formatted_step[0].upper() + formatted_step[1:] if formatted_step else template
-            full_step = f"{step_number}. {input_info_str}{formatted_step} ({node_data.label})"
-            output_lines.append(full_step)
-            step_number += 1 # Increment step number
-
-
-        # --- Format Connections --- 
-        # Only add connections if it wasn't a section-junction handled above
-        # The check `first_node_id in section_nodes and len(path_nodes) == 1` handles this case
-        if step_thread_id in path_connections:
-            to_paths = path_connections[step_thread_id]["to_paths"]
-            if to_paths:
-                output_lines.append("   Continues in:")
-                sorted_connections = sorted(to_paths, key=lambda x: x['path_id'])
-                for conn in sorted_connections:
-                    output_lines.append(f"   - Step Thread {conn['path_id']} (via {conn['interface']} interface)")
+                continue
+        
+        # If no direct section start, check if any node in the path belongs to a section
+        if not section_label:
+            for node_id in path_nodes:
+                # Check if this node has an incoming connection from a section
+                for conn in incoming_connections.get(node_id, []):
+                    from_node_id = conn.get('from_node')
+                    if from_node_id in section_nodes:
+                        section_data = nodes_dict[from_node_id]
+                        section_label = section_data.label
+                        break
+                if section_label:
+                    break
+        
+        # Store the thread in the appropriate section or as standalone
+        if section_label:
+            if section_label not in section_threads:
+                section_threads[section_label] = []
+                section_order.append(section_label)
+            section_threads[section_label].append(path_info)
+        else:
+            standalone_threads.append(path_info)
+    
+    # Now output in nested chapter-like format
+    
+    # Print section-organized threads first
+    for section_label in section_order:
+        threads = section_threads[section_label]
+        if not threads:
+            continue
+            
+        # Print section header
+        output_lines.append(f"\n==== Section: {section_label} ====")
+        
+        # Print each thread in this section with increased indentation
+        for path_info in threads:
+            step_thread_id = path_info["id"]
+            path_type = path_info["type"]
+            path_nodes = path_info["path"]
+            
+            output_lines.append(f"\n  == Step Thread {step_thread_id} ==")
+            
+            # --- Format Steps within the Thread ---
+            step_number = 1
+            start_index = 0
+            
+            # Skip the section node itself if it's the first node
+            first_node_id = path_nodes[0]
+            if first_node_id in section_nodes:
+                start_index = 1
+                
+            for i in range(start_index, len(path_nodes)):
+                node_id = path_nodes[i]
+                node_data = nodes_dict[node_id]
+                
+                # Skip section nodes
+                if node_id in section_nodes:
+                    continue
+                    
+                # Format regular step or junction step
+                template = node_data.filled_story_template or f"Node {node_data.name} ({node_id})"
+                all_incoming = incoming_connections.get(node_id, [])
+                input_info_str = format_input_info(node_id, step_thread_id, all_incoming)
+                
+                # Format and add the step line
+                formatted_step = template.strip()
+                if formatted_step and not formatted_step.endswith(('.', '?', '!')):
+                    formatted_step += '.'
+                formatted_step = formatted_step[0].upper() + formatted_step[1:] if formatted_step else template
+                full_step = f"    {step_number}. {input_info_str}{formatted_step} ({node_data.label})"
+                output_lines.append(full_step)
+                step_number += 1
+                
+            # --- Format Connections ---
+            if step_thread_id in path_connections:
+                to_paths = path_connections[step_thread_id]["to_paths"]
+                if to_paths:
+                    output_lines.append("      Continues in:")
+                    sorted_connections = sorted(to_paths, key=lambda x: x['path_id'])
+                    for conn in sorted_connections:
+                        output_lines.append(f"      - Step Thread {conn['path_id']} (via {conn['interface']} interface)")
+    
+    # Print standalone threads (not in any section)
+    if standalone_threads:
+        output_lines.append("\n==== Standalone Threads ====")
+        
+        for path_info in standalone_threads:
+            step_thread_id = path_info["id"]
+            path_nodes = path_info["path"]
+            
+            output_lines.append(f"\n  == Step Thread {step_thread_id} ==")
+            
+            # Format steps as above
+            step_number = 1
+            
+            for i, node_id in enumerate(path_nodes):
+                node_data = nodes_dict[node_id]
+                
+                # Skip section nodes (shouldn't happen in standalone threads)
+                if node_id in section_nodes:
+                    continue
+                    
+                template = node_data.filled_story_template or f"Node {node_data.name} ({node_id})"
+                all_incoming = incoming_connections.get(node_id, [])
+                input_info_str = format_input_info(node_id, step_thread_id, all_incoming)
+                
+                formatted_step = template.strip()
+                if formatted_step and not formatted_step.endswith(('.', '?', '!')):
+                    formatted_step += '.'
+                formatted_step = formatted_step[0].upper() + formatted_step[1:] if formatted_step else template
+                full_step = f"    {step_number}. {input_info_str}{formatted_step} ({node_data.label})"
+                output_lines.append(full_step)
+                step_number += 1
+                
+            # Format connections
+            if step_thread_id in path_connections:
+                to_paths = path_connections[step_thread_id]["to_paths"]
+                if to_paths:
+                    output_lines.append("      Continues in:")
+                    sorted_connections = sorted(to_paths, key=lambda x: x['path_id'])
+                    for conn in sorted_connections:
+                        output_lines.append(f"      - Step Thread {conn['path_id']} (via {conn['interface']} interface)")
 
     # --- Summary Section ---
     output_lines.append(f"\nSummary: Identified {len(complete_paths)} distinct Step Threads/segments")
-    # (Add more detailed summary if needed, e.g., listing sections)
     
     # List Sections Found
     if section_nodes:
@@ -690,14 +745,12 @@ def parse_all_paths(flow_schema: FlowSchema) -> str:
                        pos_x = float(node.position.x)
                        pos_y = float(node.position.y)
                   except: pass
-                  # Include which Step Thread(s) contain this section, if any (might be none if it's isolated)
                   containing_threads = nodes_in_paths.get(sec_id, [])
-                  thread_str = f" (in Step Thread {', '.join(map(str, sorted(containing_threads)))})" if containing_threads else ""
+                  thread_str = f" (contains {len(section_threads.get(node.label, []))} Step Threads)" if node.label in section_threads else ""
                   section_info_list.append((pos_y, pos_x, f"- {node.label}{thread_str} (Node ID: {sec_id})"))
         
         for _, _, line in sorted(section_info_list):
              output_lines.append(line)
-
 
     # Final join
     return "\n".join(output_lines)
