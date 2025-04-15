@@ -1,330 +1,184 @@
 import pandas as pd
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Tuple
+import json
 
-def parse_flow_schema(schema: Dict[str, Any]) -> pd.DataFrame:
-    nodes = {str(node['id']): node for node in schema['nodes']}
+def parse_flow_schema(schema: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Parses a flow schema dict and returns two DataFrames:
+    - sections_df: Each row is a section node, including parent and trigger info.
+    - paths_df: Each row is a path starting from sections (excluding pure triggers)
+                OR from lone paths, with a recursive narrative. Narratives for
+                section paths start directly with the first node's description.
+    """
+    nodes = schema.get('nodes', [])
     connections = schema.get('connections', [])
 
-    # Build input/output maps
-    input_map = {str(node['id']): [] for node in schema['nodes']}
-    output_map = {str(node['id']): [] for node in schema['nodes']}
+    # Build node lookup by id
+    node_map = {str(n['id']): n for n in nodes}
+    all_node_ids = set(node_map.keys())
+    section_node_ids = {str(n['id']) for n in nodes if n.get('type', '').lower() == 'section'}
+
+    # Build connection lookup
+    outgoing = {}
+    incoming = {}
+    target_node_ids = set()
     for conn in connections:
-        output_map[str(conn['outputNode'])].append(conn)
-        input_map[str(conn['inputNode'])].append(conn)
+        out_id = str(conn['outputNode'])
+        in_id = str(conn['inputNode'])
+        target_node_ids.add(in_id)
+        outgoing.setdefault(out_id, []).append((conn, in_id))
+        incoming.setdefault(in_id, []).append((conn, out_id))
 
-    def connection_text(conn):
-        return f"Using {conn['outputNodeInterface']} from this step as {conn['inputNodeInterface']}."
-
-    def node_desc(node):
-        return node.get('filled_story_template') or node.get('story_template') or node.get('name')
-
-    def is_section(node):
-        # Ensure node is not None before accessing 'type'
-        return node and node.get('type', '').lower() == 'section'
-
-    # Helper to find all root nodes (no incoming connections)
-    def find_roots():
-        return [nid for nid, ins in input_map.items() if not ins]
-
-    # Recursive path finder (handles merges/branches)
-    def trace_path(current, visited):
-        paths = []
-        if current not in nodes: # Check if node exists
-             return []
-        if current in visited:
-            return []
-
-        node = nodes[current]
-        if is_section(node):
-            return []
-
-        # Mark current node as visited for this path trace
-        v = visited.copy()
-        v.add(current)
-
-        # If this node is a merge (multiple inputs), trace each input as a separate path
-        in_conns = input_map.get(current, [])
-        if len(in_conns) > 1:
-            for conn in in_conns:
-                prev_nid = str(conn['outputNode'])
-                # Avoid infinite loops by checking if prev_nid is already in visited
-                if prev_nid not in visited:
-                    subpaths = trace_path(prev_nid, v) # Pass updated visited set
-                    for sp in subpaths:
-                        # Add this node and connection to the end of each subpath
-                        sp['nodes'].append(node)
-                        sp['conns'].append(conn)
-                        paths.append(sp)
-            # If it's a merge point but has no valid incoming paths traced, treat as a root for this branch
-            if not paths and not in_conns: # Check if it truly has no connections
-                 paths.append({'nodes': [node], 'conns': []})
-            elif not paths and in_conns: # If incoming connections exist but led to cycles/sections
-                 paths.append({'nodes': [node], 'conns': []}) # Treat as start of a path segment
-
-            return paths
-
-        # Otherwise, traverse forward linearly
-        path_nodes = [node]
-        path_conns = []
-        current_nid_fwd = current # Use a different variable for forward traversal
-
-        while True: # Loop for forward traversal
-            outs = output_map.get(current_nid_fwd, [])
-            if len(outs) != 1: # Stop if branch or leaf
-                 break
-            conn = outs[0]
-            next_node_id = str(conn['inputNode'])
-
-            if next_node_id not in nodes: # Check node existence
-                 break
-            if next_node_id in v: # Stop if cycle detected
-                 break
-            next_node = nodes[next_node_id]
-            if is_section(next_node): # Stop if next is a section
-                 break
-
-            path_conns.append(conn)
-            path_nodes.append(next_node)
-            v.add(next_node_id) # Add to visited set for this path
-            current_nid_fwd = next_node_id # Move forward
-
-        # If the path starts from a node with no incoming connections (a true root)
-        if not in_conns:
-             paths.append({'nodes': path_nodes, 'conns': path_conns})
-        # If it starts from a node with one incoming connection (part of a larger path potentially)
-        elif len(in_conns) == 1:
-             prev_nid = str(in_conns[0]['outputNode'])
-             if prev_nid not in visited: # Avoid cycles
-                 subpaths = trace_path(prev_nid, v) # Trace back from the single input
-                 for sp in subpaths:
-                     sp['nodes'].extend(path_nodes) # Append current linear segment
-                     sp['conns'].extend([in_conns[0]] + path_conns) # Prepend incoming conn
-                     paths.append(sp)
-             else: # Cycle detected, treat current segment as a path
-                 paths.append({'nodes': path_nodes, 'conns': path_conns})
-
-        # If no paths were generated (e.g., started on an isolated node), add it
-        if not paths and not is_section(node):
-             paths.append({'nodes': [node], 'conns': []})
-
-        return paths
-
-
-    # Find all root nodes and trace all paths
-    all_paths_raw = []
-    processed_starts = set()
-
-    # Start tracing from true roots first
-    for root in find_roots():
-        if root not in processed_starts:
-             paths = trace_path(root, set())
-             all_paths_raw.extend(paths)
-             processed_starts.add(root) # Mark root as processed
-
-    # Trace from other nodes if they weren't part of paths found from roots
-    # This handles disconnected graphs or nodes only reachable via merges
-    for nid in nodes:
-         if nid not in processed_starts and not is_section(nodes[nid]):
-             # Check if this node was already included in any path found so far
-             already_covered = False
-             for p in all_paths_raw:
-                 if any(str(n['id']) == nid for n in p['nodes']):
-                     already_covered = True
-                     break
-             if not already_covered:
-                 paths = trace_path(nid, set())
-                 all_paths_raw.extend(paths)
-                 processed_starts.add(nid) # Mark this start as processed
-
-
-    # --- Deduplicate and Filter Subpaths ---
-    unique_paths_data = []
-    seen_node_sequences = set()
-
-    for path in all_paths_raw:
-        if not path['nodes']:
-            continue
-        node_ids_tuple = tuple(str(n['id']) for n in path['nodes'])
-        if node_ids_tuple not in seen_node_sequences:
-            unique_paths_data.append(path)
-            seen_node_sequences.add(node_ids_tuple)
-
-    # Filter subpaths
-    path_node_ids = [ [str(n['id']) for n in path['nodes']] for path in unique_paths_data ]
-    keep = [True] * len(unique_paths_data)
-
-    def is_subpath(short, long):
-        if not short or not long or len(short) > len(long): return False
-        short_tuple = tuple(short)
-        for i in range(len(long) - len(short) + 1):
-            if tuple(long[i:i+len(short)]) == short_tuple:
-                return True
-        return False
-
-    for i, ids_i in enumerate(path_node_ids):
-        for j, ids_j in enumerate(path_node_ids):
-            if i != j and is_subpath(ids_i, ids_j):
-                keep[i] = False
+    # 1. Extract all section nodes and identify parents/roots
+    section_details = {}
+    child_section_ids = set()
+    for sec_id in section_node_ids:
+        parent_id = None
+        for conn, source_id in incoming.get(sec_id, []):
+            if source_id in section_node_ids:
+                parent_id = source_id
+                child_section_ids.add(sec_id)
                 break
+        sec = node_map[sec_id]
+        section_details[sec_id] = {
+            'section_id': sec['id'],
+            'label': sec.get('label', ''),
+            'description': sec.get('filled_story_template') or sec.get('story_template') or sec.get('description', ''),
+            'position': sec.get('position', {}),
+            'parent_section_id': parent_id,
+            'is_root': True,
+            'is_pure_trigger': False,
+            'raw': sec
+        }
+    for sec_id in section_details:
+         section_details[sec_id]['is_root'] = sec_id not in child_section_ids
+    # sections_df = pd.DataFrame(list(section_details.values())) # Build later after trigger check
 
-    maximal_paths = [path for path, k in zip(unique_paths_data, keep) if k]
+    # 2. Identify ALL potential starting points for paths
+    nodes_with_no_inputs = all_node_ids - target_node_ids
+    lone_path_start_ids = nodes_with_no_inputs - section_node_ids
+    all_potential_path_start_ids = section_node_ids | lone_path_start_ids
 
-    # --- Build DataFrame Rows ---
-    final_rows = []
-    path_order_map = {} # Map path_data object id to order
+    # 3. Identify "Pure Trigger" sections
+    pure_trigger_section_ids = set()
+    for sec_id in section_node_ids:
+        immediate_children = {tgt_id for conn, tgt_id in outgoing.get(sec_id, [])}
+        if immediate_children and immediate_children.issubset(all_potential_path_start_ids):
+             section_details[sec_id]['is_pure_trigger'] = True
+             pure_trigger_section_ids.add(sec_id)
 
-    # Add section rows first
-    # Sort sections by X position for consistent ordering
-    section_nodes_sorted = sorted([n for n in nodes.values() if is_section(n)], key=lambda n: n['position']['x'])
-    current_section_stack_for_context = []
-    section_id_map = {} # Map description back to ID for later update
-    for node in section_nodes_sorted:
-         # Logic to manage section stack based on X position for nesting context
-         while current_section_stack_for_context and node['position']['x'] <= current_section_stack_for_context[-1]['position']['x']:
-             current_section_stack_for_context.pop()
-         current_section_stack_for_context.append(node)
-         section_id_map[node_desc(node)] = str(node['id']) # Store ID by description
+    # Finalize sections_df
+    sections_df = pd.DataFrame(list(section_details.values()))
 
-         final_rows.append({
-             'Type': 'section',
-             'Description': node_desc(node),
-             'First Inputs': [], # Sections don't have these properties in the context of paths
-             'Last Outputs': [],
-             'Contained Paths': [] # Initialize
-         })
+    # 4. Determine final starting points (exclude pure triggers)
+    final_path_start_ids = all_potential_path_start_ids - pure_trigger_section_ids
 
-    # Build path rows and map first node to order
-    path_firstnode_to_order = {}
-    for idx, path_data in enumerate(maximal_paths):
-        order = idx + 1
-        path_order_map[id(path_data)] = order # Use object id as key
 
-        path_nodes = path_data['nodes']
-        path_conns = path_data['conns']
+    def get_node_desc(node):
+        return node.get('filled_story_template') or node.get('story_template') or node.get('description', '')
 
-        first_node_id = str(path_nodes[0]['id'])
-        path_firstnode_to_order[first_node_id] = order
+    def get_node_label(node):
+        return node.get('label') or node.get('name') or node.get('id')
 
-        first_inputs = [inp.get('name') for inp in path_nodes[0].get('inputs', []) if inp.get('name')]
-        last_outputs = [out.get('name') for out in path_nodes[-1].get('outputs', []) if out.get('name')]
-        descs = [node_desc(n) for n in path_nodes]
+    def build_narrative_recursive(node_id, indent=0, is_first_step_after_section=False):
+        """Builds the recursive narrative for steps *after* the given node_id."""
+        outs = outgoing.get(node_id, [])
+        if not outs:
+            return "", [] # Narrative, node_ids_in_path
 
-        # Improved readability description
-        if descs:
-            full_desc = f"Step 1: {descs[0]}:"
-            # Adjust connection text logic to match nodes and connections correctly
-            conn_idx = 0
-            for i in range(len(path_nodes) - 1):
-                 # Find the connection between node i and node i+1
-                 current_node_id = str(path_nodes[i]['id'])
-                 next_node_id_in_path = str(path_nodes[i+1]['id'])
-                 found_conn = None
-                 # Search in path_conns for the specific link
-                 temp_conn_idx = 0
-                 for k, c in enumerate(path_conns):
-                      # Check both forward and backward possibilities due to trace logic
-                      if str(c.get('outputNode')) == current_node_id and str(c.get('inputNode')) == next_node_id_in_path:
-                           found_conn = c
-                           # Ideally, remove conn from list or use index carefully if order matters
-                           break
-                      # If trace_path added connections in reverse for merge points:
-                      if str(c.get('inputNode')) == current_node_id and str(c.get('outputNode')) == next_node_id_in_path:
-                           # This case might occur if trace_path logic appends connections differently
-                           # We need consistent connection direction representation
-                           # For now, assume connections always point output -> input
-                           pass # Adjust if needed based on trace_path output
+        narrative_parts = []
+        node_ids_in_path = []
 
-                 if found_conn:
-                      full_desc += f"\nthen Step {i+2}: {descs[i+1]}:\n    ↳ {connection_text(found_conn)}"
-                 else:
-                      # Fallback if connection not found (should not happen in valid path)
-                      full_desc += f"\nthen Step {i+2}: {descs[i+1]}:"
+        if len(outs) > 1:
+            # Branching
+            branch_narr = f"{'  '*indent}Here we have now {len(outs)} outputs/options from '{get_node_label(node_map[node_id])}':"
+            narrative_parts.append(branch_narr)
+            branch_node_ids = []
+            for conn, tgt_id in outs:
+                next_node_id = conn['inputNode']
+                next_input_name = conn['inputNodeInterface']
+                next_node = node_map[next_node_id]
+                label = get_node_label(next_node)
+                desc = get_node_desc(next_node)
+                # Append label in parentheses
+                desc_with_label = f"{desc} ({label})" if desc else f"({label})"
+                step = f"{'  '*(indent+1)}- Using '{conn['outputNodeInterface']}' as '{next_input_name}' to '{label}', we do: {desc_with_label}"
+                # Recursively expand this branch (never the first step after section)
+                sub_narrative, sub_nodes = build_narrative_recursive(next_node_id, indent + 2, is_first_step_after_section=False)
+                if sub_narrative:
+                    step += f"\n{sub_narrative}"
+                narrative_parts.append(step)
+                branch_node_ids.extend([next_node_id] + sub_nodes)
+            node_ids_in_path.extend(branch_node_ids)
 
         else:
-            full_desc = ''
+            # Linear step
+            conn, tgt_id = outs[0]
+            next_node_id = conn['inputNode']
+            next_input_name = conn['inputNodeInterface']
+            next_node = node_map[next_node_id]
+            label = get_node_label(next_node)
+            desc = get_node_desc(next_node)
+            # Append label in parentheses
+            desc_with_label = f"{desc} ({label})" if desc else f"({label})"
 
-        final_rows.append({
-            'Type': 'path',
-            'Description': full_desc,
-            'First Inputs': first_inputs,
-            'Last Outputs': last_outputs,
-            'Order': order
+            if is_first_step_after_section:
+                # First step after section: Just the description (with label)
+                step = f"{'  '*indent}{desc_with_label}"
+            else:
+                # Subsequent steps: Include connection text
+                step = f"{'  '*indent}Then, using '{conn['outputNodeInterface']}' from '{get_node_label(node_map[node_id])}' as '{next_input_name}' to '{label}', we do: {desc_with_label}"
+
+            # Recursively continue (never the first step after section)
+            sub_narrative, sub_nodes = build_narrative_recursive(next_node_id, indent, is_first_step_after_section=False)
+            if sub_narrative:
+                step += f"\n{sub_narrative}"
+            narrative_parts.append(step)
+            node_ids_in_path.extend([next_node_id] + sub_nodes)
+
+        return "\n".join(narrative_parts), node_ids_in_path
+
+
+    path_rows = []
+    # Iterate over FINAL identified starting points (excluding pure triggers)
+    for start_id in final_path_start_ids:
+        start_node = node_map[start_id]
+        start_label = get_node_label(start_node)
+        start_desc = get_node_desc(start_node)
+        parent_section_id = None
+        is_section_start = start_id in section_node_ids
+        final_narrative = ""
+        nodes_in_path_ids = []
+
+        if is_section_start:
+            # For sections, the narrative starts directly with the first node's description
+            full_narrative, nodes_in_path_ids = build_narrative_recursive(start_id, 0, is_first_step_after_section=True)
+            final_narrative = full_narrative
+            parent_section_id = section_details.get(start_id, {}).get('parent_section_id')
+        else: # Lone path start
+             # Append label in parentheses for the starting node description
+             start_desc_with_label = f"{start_desc} ({start_label})" if start_desc else f"({start_label})"
+             initial_narrative_str = f"Starting from '{start_label}': {start_desc_with_label}"
+             # Build the rest of the narrative starting from this node
+             full_narrative, nodes_in_path_ids = build_narrative_recursive(start_id, 0, is_first_step_after_section=False)
+             final_narrative = initial_narrative_str
+             if full_narrative:
+                 final_narrative += f"\n{full_narrative}"
+
+        # Get labels for the path nodes (always include the start node)
+        unique_ordered_nodes = list(dict.fromkeys([start_id] + nodes_in_path_ids))
+        path_labels = [get_node_label(node_map[nid]) for nid in unique_ordered_nodes]
+
+        path_rows.append({
+            'start_node_id': start_id,
+            'parent_section_id': parent_section_id,
+            'is_section_start': is_section_start,
+            'path_nodes': path_labels,
+            'parsed_text': final_narrative,
+            'raw_path': [node_map[nid] for nid in unique_ordered_nodes if nid != start_id]
         })
 
+    paths_df = pd.DataFrame(path_rows)
+    return sections_df, paths_df
 
-    # --- Assign Paths to Sections (Backward Trace) ---
-    # Helper function to find the owning section by tracing backwards (BFS)
-    def find_owning_section(start_node_id):
-        queue = [(start_node_id, [start_node_id])] # (current_node_id, path_taken_history)
-        visited_trace = {} # Store first section found from each node: node_id -> section_id
-
-        while queue:
-            current_nid, path_hist = queue.pop(0)
-
-            # If we already found the owning section starting from this node, return it
-            if current_nid in visited_trace:
-                 # If visited_trace[current_nid] is None, it means this branch doesn't lead to a section
-                 # If it's a section_id, we return that
-                 if visited_trace[current_nid] is not None:
-                      return visited_trace[current_nid]
-                 else:
-                      continue # This branch is a dead end for finding sections
-
-            # Check incoming connections
-            in_conns = input_map.get(current_nid, [])
-            found_section_on_this_level = None
-
-            if not in_conns:
-                # Reached a root node without finding a section on this branch
-                visited_trace[current_nid] = None
-                continue
-
-            potential_parents = []
-            for conn in in_conns:
-                prev_nid = str(conn['outputNode'])
-                if prev_nid in path_hist: # Avoid cycles within this specific trace
-                    continue
-
-                prev_node = nodes.get(prev_nid)
-                if prev_node and is_section(prev_node):
-                    # Found a section directly connected
-                    found_section_on_this_level = prev_nid
-                    # Don't return immediately, check all direct parents first
-                    # If multiple direct sections, maybe return None or prioritize? For now, take the first found.
-                    # Let's prioritize: if we find one, store it and continue BFS level
-                    visited_trace[current_nid] = found_section_on_this_level
-                    # We can actually return here, as BFS guarantees shortest path
-                    return found_section_on_this_level
-
-                # If not a section, add to potential parents to explore further back
-                potential_parents.append(prev_nid)
-
-            # If no direct section found, add valid parents to queue
-            if found_section_on_this_level is None:
-                 visited_trace[current_nid] = None # Mark as visited, no section found *yet* from here
-                 for parent_nid in potential_parents:
-                      if parent_nid not in visited_trace: # Only queue if not already processed
-                           new_path_hist = path_hist + [parent_nid]
-                           queue.append((parent_nid, new_path_hist))
-
-        # If queue finishes and start_node_id wasn't resolved to a section
-        return visited_trace.get(start_node_id, None)
-
-
-    # Assign paths to sections
-    section_to_orders = {sid: set() for sid in section_id_map.values()}
-
-    for first_node_id, order in path_firstnode_to_order.items():
-        owning_section_id = find_owning_section(first_node_id)
-        if owning_section_id and owning_section_id in section_to_orders:
-            section_to_orders[owning_section_id].add(order)
-
-    # Update the section rows in the final_rows DataFrame
-    for row in final_rows:
-        if row['Type'] == 'section':
-            section_desc = row['Description']
-            matching_section_id = section_id_map.get(section_desc)
-            if matching_section_id:
-                row['Contained Paths'] = sorted(list(section_to_orders.get(matching_section_id, set())))
-
-    return pd.DataFrame(final_rows)
+ 
