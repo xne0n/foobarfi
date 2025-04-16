@@ -1,22 +1,9 @@
 import pandas as pd
-import logging
-from typing import Tuple
+from langchain_core.messages import HumanMessage
 from sogenai_chat_model import SocGenAIChatModel
 
-def _extract_response_content(resp) -> str:
-    try:
-        gens = resp.generations
-        first = gens[0]
-        gen = first[0] if isinstance(first, list) else first
-        if hasattr(gen, "message"):
-            return gen.message.content.strip()
-        if hasattr(gen, "text"):
-            return gen.text.strip()
-        return str(gen)
-    except Exception:
-        return ""
 
-def process_schema_with_ai(sections_df: pd.DataFrame, paths_df: pd.DataFrame, ai_model: SocGenAIChatModel) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def process_schema_with_ai(sections_df: pd.DataFrame, paths_df: pd.DataFrame, ai_model: SocGenAIChatModel) -> (pd.DataFrame, pd.DataFrame):
     sections = sections_df.copy()
     paths = paths_df.copy()
 
@@ -39,13 +26,8 @@ def process_schema_with_ai(sections_df: pd.DataFrame, paths_df: pd.DataFrame, ai
             "Rewrite the following steps in a clear, structured format (e.g., numbered or bullet list):\n"
             f"{text}"
         )
-        try:
-            resp = ai_model.generate(prompt)
-        except Exception as e:
-            logging.error(f"AI rewrite error for path {row.get('start_node_id')}: {e}")
-            steps = ''
-        else:
-            steps = _extract_response_content(resp)
+        resp = ai_model.generate([prompt])
+        steps = resp.generations[0].text.strip()
         rewritten.append(steps)
     paths['rewritten_steps'] = rewritten
 
@@ -63,13 +45,8 @@ def process_schema_with_ai(sections_df: pd.DataFrame, paths_df: pd.DataFrame, ai
             f"Associated Rewritten Steps:\n{combined}\n\n"
             "Please provide a concise summary of this section."
         )
-        try:
-            resp = ai_model.generate(prompt)
-        except Exception as e:
-            logging.error(f"AI summary error for section {sec_id}: {e}")
-            summary = ''
-        else:
-            summary = _extract_response_content(resp)
+        resp = ai_model.generate([prompt])
+        summary = resp.generations[0].text.strip()
         summaries.append(summary)
     sections['summary'] = summaries
 
