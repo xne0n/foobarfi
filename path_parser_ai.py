@@ -1,9 +1,8 @@
 import pandas as pd
-from langchain_core.messages import HumanMessage
 from sogenai_chat_model import SocGenAIChatModel
-
-
-def process_schema_with_ai(sections_df: pd.DataFrame, paths_df: pd.DataFrame, ai_model: SocGenAIChatModel) -> (pd.DataFrame, pd.DataFrame):
+import time
+ 
+def process_schema_with_ai(sections_df: pd.DataFrame, paths_df: pd.DataFrame, ai_model: SocGenAIChatModel) -> tuple[pd.DataFrame, pd.DataFrame]:
     sections = sections_df.copy()
     paths = paths_df.copy()
 
@@ -28,7 +27,7 @@ def process_schema_with_ai(sections_df: pd.DataFrame, paths_df: pd.DataFrame, ai
             "Rewrite the following steps in a clear, structured format (e.g., numbered or bullet list):\n"
             f"{text}"
         )
-        resp = ai_model.generate([prompt])
+        resp = generate_with_retry(ai_model, [prompt])
         steps = resp.generations[0][0].text.strip()
         rewritten.append(steps)
     paths['rewritten_steps'] = rewritten
@@ -47,7 +46,7 @@ def process_schema_with_ai(sections_df: pd.DataFrame, paths_df: pd.DataFrame, ai
             f"Associated Rewritten Steps:\n{combined}\n\n"
             "Please provide a concise summary of this section."
         )
-        resp = ai_model.generate([prompt])
+        resp = generate_with_retry(ai_model, [prompt])
         summary = resp.generations[0][0].text.strip()
         summaries.append(summary)
     sections['summary'] = summaries
@@ -58,3 +57,15 @@ def process_schema_with_ai(sections_df: pd.DataFrame, paths_df: pd.DataFrame, ai
         print(f"Warning: {len(uncovered)} lone path(s) were not rewritten.")
 
     return sections, paths
+
+
+def generate_with_retry(ai_model: SocGenAIChatModel, prompts: list[str], retries: int = 3, base_wait: float = 1.0):
+    """Call ai_model.generate with retries on errors (e.g., rate limits)."""
+    for attempt in range(retries):
+        try:
+            return ai_model.generate(prompts)
+        except Exception:
+            if attempt < retries - 1:
+                time.sleep(base_wait * (2 ** attempt))
+                continue
+            raise
