@@ -10,7 +10,9 @@ def process_schema_with_ai(sections_df: pd.DataFrame, paths_df: pd.DataFrame, ai
     # 1. Sort sections: 'Start' or 'Main' first, then alphanumeric by description
     def sort_key(desc: str) -> str:
         low = desc.lower() if isinstance(desc, str) else ''
-        if low.startswith('start') or low.startswith('main'):
+        # detect 'start' or 'main' within the first 20 characters
+        window = low[:20]
+        if 'start' in window or 'main' in window:
             return ''
         return desc or ''
 
@@ -27,7 +29,7 @@ def process_schema_with_ai(sections_df: pd.DataFrame, paths_df: pd.DataFrame, ai
             f"{text}"
         )
         resp = ai_model.generate([prompt])
-        steps = resp.generations[0].text.strip()
+        steps = resp.generations[0][0].text.strip()
         rewritten.append(steps)
     paths['rewritten_steps'] = rewritten
 
@@ -46,7 +48,7 @@ def process_schema_with_ai(sections_df: pd.DataFrame, paths_df: pd.DataFrame, ai
             "Please provide a concise summary of this section."
         )
         resp = ai_model.generate([prompt])
-        summary = resp.generations[0].text.strip()
+        summary = resp.generations[0][0].text.strip()
         summaries.append(summary)
     sections['summary'] = summaries
 
