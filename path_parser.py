@@ -330,38 +330,38 @@ def parse_flow_schema(schema: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFram
         except IndexError:
             return "" # Should not happen if IDs are consistent
 
-        section_label = section_row['label']
-        # Use description field from section_details which prioritizes filled_story_template
+        # Use description (filled_story_template priority) directly as header, indented
         section_desc = section_row['description']
-        header = f"{indent_str}Section: {section_label}"
-        if section_desc and section_desc != section_label:
-             header += f" ({section_desc})"
-        narrative_parts.append(header)
+        if section_desc: # Only add header if description exists
+             header = f"{indent_str}{section_desc}"
+             narrative_parts.append(header)
+        # else: # If no description, no header line is added
 
         # Find paths starting directly from this section
         section_paths = current_paths_df[current_paths_df['start_node_id'] == section_id]
         if not section_paths.empty:
-            # Assuming one path row per start_node_id in paths_df
             path_narrative = section_paths.iloc[0]['indented_narrative']
             if path_narrative:
-                # Re-indent the existing narrative relative to the section header (add one level)
-                # Use actual newline for splitting and joining
-                reindented_path_narrative = "\n".join([f"{indent_str}  {line}" for line in path_narrative.split('\n') if line.strip()])
+                # Re-indent the existing path narrative relative to the section header (add one level)
+                # The path narrative already starts with correct relative indentation (level 0 for section outputs)
+                # So we just need to prepend the section's indent + one more level
+                path_indent_str = "  " * (indent_level + 1)
+                reindented_path_narrative = "\n".join([f"{path_indent_str}{line.lstrip()}" for line in path_narrative.split('\n') if line.strip()])
                 narrative_parts.append(reindented_path_narrative)
 
         # Find child sections
         child_sections = current_sections_df[current_sections_df['parent_section_id'] == section_id]
-        # Sort children alphabetically by label
-        child_sections = child_sections.sort_values(by='label')
+        child_sections = child_sections.sort_values(by='label') # Keep sorting by label for consistent order
 
         for _, child_row in child_sections.iterrows():
             child_id = child_row['section_id']
-            # Recursively build narrative for child section
+            # Recursively build narrative for child section, increase indent
             child_narrative = build_full_section_narrative(child_id, current_sections_df, current_paths_df, current_node_map, indent_level + 1)
             if child_narrative:
                 narrative_parts.append(child_narrative)
 
-        return "\n".join(narrative_parts) # Use actual newline
+        # Join parts with single newline
+        return "\n".join(narrative_parts)
 
     # Add the new column to sections_df
     sections_df['full_section_narrative'] = None # Initialize column
@@ -402,15 +402,13 @@ def parse_flow_schema(schema: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFram
     if not lone_paths.empty:
         all_narrative_parts.append("Additional instructions :")
         for _, lone_row in lone_paths.iterrows():
-            start_label = lone_row['start_node_label']
-            start_desc = lone_row['start_node_description']
             path_narrative = lone_row['indented_narrative']
-            header = f"Lone Path: {start_label}"
-            if start_desc and start_desc != start_label:
-                header += f" ({start_desc})"
-            full_lone_path = f"{header}\n{path_narrative}" if path_narrative else header # Use actual newline
-            all_narrative_parts.append(full_lone_path)
+            # The indented_narrative for lone paths already starts with '- {start_desc}' at indent 0.
+            # Simply append it directly.
+            if path_narrative:
+                 all_narrative_parts.append(path_narrative)
 
+    # Join final parts with double newline
     full_flow_narrative = "\n\n".join(all_narrative_parts)
 
     return sections_df, paths_df, full_flow_narrative
