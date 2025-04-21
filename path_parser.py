@@ -342,11 +342,8 @@ def parse_flow_schema(schema: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFram
         if not section_paths.empty:
             path_narrative = section_paths.iloc[0]['indented_narrative']
             if path_narrative:
-                # Re-indent the existing path narrative relative to the section header (add one level)
-                # The path narrative already starts with correct relative indentation (level 0 for section outputs)
-                # So we just need to prepend the section's indent + one more level
-                path_indent_str = "  " * (indent_level + 1)
-                reindented_path_narrative = "\n".join([f"{path_indent_str}{line.lstrip()}" for line in path_narrative.split('\n') if line.strip()])
+                # Re-indent the existing path narrative relative to the section header, preserving nested indentation
+                reindented_path_narrative = "\n".join([f"{indent_str}{line}" for line in path_narrative.split('\n') if line.strip()])
                 narrative_parts.append(reindented_path_narrative)
 
         # Find child sections
