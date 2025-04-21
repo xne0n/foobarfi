@@ -376,9 +376,10 @@ def parse_flow_schema(schema: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFram
         sections_df.loc[index, 'full_section_narrative'] = full_narrative
 
     # --- Assemble Final Combined Narrative ---
-    all_narrative_parts = []
+    # Prepare a flat list of all lines, preserving indentation depth
+    all_lines: List[str] = []
 
-    # ... (sorting logic remains the same) ...
+    # Sort root sections: 'Start'/'Main' first, then alphanumeric by description label
     def sort_key(desc: Union[str, None]) -> str:
         low = desc.lower() if isinstance(desc, str) else ''
         window = low[:20]
@@ -391,32 +392,30 @@ def parse_flow_schema(schema: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFram
     )
     sections_df.drop(columns=['__sort_key'], inplace=True)
 
-    # Append narratives from sorted root sections
+    # Append each root section's lines
     for _, root_row in sorted_root_sections.iterrows():
         narrative = root_row['full_section_narrative']
-        # Ensure narrative is a string and not empty before appending
         if isinstance(narrative, str) and narrative.strip():
-            all_narrative_parts.append(narrative)
+            for line in narrative.split("\n"):
+                all_lines.append(line)
+            # Blank line separates sections
+            all_lines.append("")
 
-    # Prepare lone paths
+    # Prepare lone paths sorted by description
     lone_paths = paths_df[paths_df['is_section_start'] == False].copy()
     lone_paths.sort_values(by='start_node_description', ascending=True, inplace=True, na_position='last')
-
-    # Append lone paths if they exist
     if not lone_paths.empty:
-        # Add a separator line before the lone paths block
-        all_narrative_parts.append("Additional instructions :")
+        all_lines.append("Additional instructions :")
         for _, lone_row in lone_paths.iterrows():
             path_narrative = lone_row['indented_narrative']
-            # Ensure path_narrative is a string and not empty
             if isinstance(path_narrative, str) and path_narrative.strip():
-                 all_narrative_parts.append(path_narrative)
+                for line in path_narrative.split("\n"):
+                    all_lines.append(line)
+                all_lines.append("")
 
-    # Join all collected narrative parts (root sections + lone paths)
-    # Use double newline ('\n\n') to ensure a blank line separates each major part.
-    full_flow_narrative = "\n\n".join(all_narrative_parts)
+    # Join all lines with single newline, preserving indentation
+    full_flow_narrative = "\n".join(all_lines).rstrip()
 
-    # Return the results, including the final combined narrative string
     return sections_df, paths_df, full_flow_narrative
 
 
