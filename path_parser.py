@@ -328,14 +328,14 @@ def parse_flow_schema(schema: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFram
         try:
             section_row = current_sections_df[current_sections_df['section_id'] == section_id].iloc[0]
         except IndexError:
-            return "" # Should not happen if IDs are consistent
+            return ""
 
         # Use description (filled_story_template priority) directly as header, indented
         section_desc = section_row['description']
-        if section_desc: # Only add header if description exists
-             header = f"{indent_str}{section_desc}"
+        if section_desc:  # Only add header if description exists
+             # Use markdown bullet for section header
+             header = f"{indent_str}- {section_desc}"
              narrative_parts.append(header)
-        # else: # If no description, no header line is added
 
         # Find paths starting directly from this section
         section_paths = current_paths_df[current_paths_df['start_node_id'] == section_id]
