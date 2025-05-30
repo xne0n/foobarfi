@@ -1,11 +1,33 @@
 import streamlit as st
 import json
 import functools
+import os
+import tempfile
 from typing import Any, Dict
 from streamlit.web.server.oauth_authlib_routes import AuthCallbackHandler, create_oauth_client
 
-# Global storage for tokens (in production, use a more robust storage solution)
-_token_storage = {}
+# Use file-based storage that persists across processes
+STORAGE_DIR = tempfile.gettempdir()
+STORAGE_FILE = os.path.join(STORAGE_DIR, "streamlit_token_storage.json")
+
+def load_token_storage() -> Dict[str, Any]:
+    """Load token storage from file"""
+    try:
+        if os.path.exists(STORAGE_FILE):
+            with open(STORAGE_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"DEBUG: Error loading token storage: {e}")
+    return {}
+
+def save_token_storage(storage: Dict[str, Any]) -> None:
+    """Save token storage to file"""
+    try:
+        with open(STORAGE_FILE, 'w') as f:
+            json.dump(storage, f)
+        print(f"DEBUG: Saved token storage to {STORAGE_FILE}")
+    except Exception as e:
+        print(f"DEBUG: Error saving token storage: {e}")
 
 def enhanced_auth_callback_get(original_method):
     """Monkey patch for AuthCallbackHandler.get to capture full token information"""
@@ -30,13 +52,16 @@ def enhanced_auth_callback_get(original_method):
         print("DEBUG: User object:", user)
 
         if user:
-            # Store the full token information in our storage
+            # Store the full token information in persistent storage
             user_id = user.get('sub') or user.get('email') or user.get('oid')
             print(f"DEBUG: Extracted user_id: {user_id}")
-            print(f"DEBUG: _token_storage before assignment: {_token_storage}")
+            
+            # Load existing storage
+            token_storage = load_token_storage()
+            print(f"DEBUG: token_storage before assignment: {token_storage}")
             
             if user_id:
-                _token_storage[user_id] = {
+                token_storage[user_id] = {
                     'full_token': token,
                     'access_token': token.get('access_token'),
                     'id_token': token.get('id_token'),
@@ -46,7 +71,9 @@ def enhanced_auth_callback_get(original_method):
                     'scope': token.get('scope'),
                     'userinfo': user
                 }
-                print(f"DEBUG: _token_storage after assignment: {_token_storage}")
+                
+                # Save to persistent storage
+                save_token_storage(token_storage)
                 print(f"DEBUG: Successfully stored token for user_id: {user_id}")
             else:
                 print("DEBUG: user_id is None or empty!")
@@ -70,7 +97,8 @@ def get_full_token_info() -> Dict[str, Any]:
     Get the full token information for the current user.
     This reuses Streamlit's existing user info to identify the user.
     """
-    print(f"DEBUG: get_full_token_info called, _token_storage: {_token_storage}")
+    token_storage = load_token_storage()
+    print(f"DEBUG: get_full_token_info called, token_storage: {token_storage}")
     
     if not st.user.is_logged_in:
         print("DEBUG: User not logged in")
@@ -79,11 +107,11 @@ def get_full_token_info() -> Dict[str, Any]:
     # Use Streamlit's existing user identification
     user_id = st.user.get('sub') or st.user.get('email') or st.user.get('oid')
     print(f"DEBUG: Looking for user_id: {user_id}")
-    print(f"DEBUG: Available keys in _token_storage: {list(_token_storage.keys())}")
+    print(f"DEBUG: Available keys in token_storage: {list(token_storage.keys())}")
     
-    if user_id and user_id in _token_storage:
+    if user_id and user_id in token_storage:
         print(f"DEBUG: Found token for user_id: {user_id}")
-        return _token_storage[user_id]
+        return token_storage[user_id]
     
     print(f"DEBUG: No token found for user_id: {user_id}")
     return {}
@@ -117,6 +145,17 @@ def make_authenticated_api_call(api_url: str, headers: Dict[str, str] = None) ->
         return response.json()
     except Exception as e:
         return {"error": str(e)}
+
+def clear_token_storage_for_user(user_id: str) -> None:
+    """Clear token storage for a specific user"""
+    try:
+        token_storage = load_token_storage()
+        if user_id in token_storage:
+            del token_storage[user_id]
+            save_token_storage(token_storage)
+            print(f"DEBUG: Cleared token storage for user_id: {user_id}")
+    except Exception as e:
+        print(f"DEBUG: Error clearing token storage: {e}")
 
 # Streamlit UI
 st.title("Enhanced Streamlit Authentication with Full Token Access")
@@ -195,6 +234,6 @@ else:
     if st.button("Log out"):
         # Clear our token storage when user logs out
         user_id = st.user.get('sub') or st.user.get('email') or st.user.get('oid')
-        if user_id and user_id in _token_storage:
-            del _token_storage[user_id]
+        if user_id:
+            clear_token_storage_for_user(user_id)
         st.logout()
