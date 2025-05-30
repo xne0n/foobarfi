@@ -25,11 +25,16 @@ def enhanced_auth_callback_get(original_method):
         
         # Get the full token object (this is the key part!)
         token = client.authorize_access_token(self)
+        print("DEBUG: Token object:", token)
         user = token.get("userinfo")
+        print("DEBUG: User object:", user)
 
         if user:
             # Store the full token information in our storage
             user_id = user.get('sub') or user.get('email') or user.get('oid')
+            print(f"DEBUG: Extracted user_id: {user_id}")
+            print(f"DEBUG: _token_storage before assignment: {_token_storage}")
+            
             if user_id:
                 _token_storage[user_id] = {
                     'full_token': token,
@@ -41,10 +46,16 @@ def enhanced_auth_callback_get(original_method):
                     'scope': token.get('scope'),
                     'userinfo': user
                 }
+                print(f"DEBUG: _token_storage after assignment: {_token_storage}")
+                print(f"DEBUG: Successfully stored token for user_id: {user_id}")
+            else:
+                print("DEBUG: user_id is None or empty!")
             
             # Continue with original Streamlit flow
             cookie_value = dict(user, origin=origin, is_logged_in=True)
             self.set_auth_cookie(cookie_value)
+        else:
+            print("DEBUG: user is None or empty!")
         
         self.redirect_to_base()
     
@@ -59,15 +70,22 @@ def get_full_token_info() -> Dict[str, Any]:
     Get the full token information for the current user.
     This reuses Streamlit's existing user info to identify the user.
     """
+    print(f"DEBUG: get_full_token_info called, _token_storage: {_token_storage}")
+    
     if not st.user.is_logged_in:
+        print("DEBUG: User not logged in")
         return {}
     
     # Use Streamlit's existing user identification
     user_id = st.user.get('sub') or st.user.get('email') or st.user.get('oid')
+    print(f"DEBUG: Looking for user_id: {user_id}")
+    print(f"DEBUG: Available keys in _token_storage: {list(_token_storage.keys())}")
     
     if user_id and user_id in _token_storage:
+        print(f"DEBUG: Found token for user_id: {user_id}")
         return _token_storage[user_id]
     
+    print(f"DEBUG: No token found for user_id: {user_id}")
     return {}
 
 def get_access_token() -> str:
