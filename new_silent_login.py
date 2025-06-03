@@ -102,21 +102,41 @@ def extract_user_data_from_userinfo(user_info: Dict[str, Any]) -> Dict[str, Any]
 
 def secure_redirect_to_auth(auth_url: str) -> None:
     """
-    Securely redirect to authentication URL using Streamlit's internal mechanism.
+    Cross-browser compatible redirect to authentication URL.
     
-    This uses the same approach as st.login() instead of meta refresh tags.
+    Uses multiple fallback mechanisms to ensure compatibility with Edge and other browsers.
     """
+    # Method 1: Try Streamlit's internal mechanism first (works in Firefox)
     context = get_script_run_ctx()
     if context is not None:
-        fwd_msg = ForwardMsg()
-        fwd_msg.auth_redirect.url = auth_url
-        context.enqueue(fwd_msg)
-        print(f"Secure redirect initiated to: {auth_url}")
-    else:
-        print("Warning: No script run context, falling back to meta refresh")
-        st.markdown(f'<meta http-equiv="refresh" content="0; URL={auth_url}">', unsafe_allow_html=True)
-        st.info("🔄 Redirecting to authentication...")
-        st.stop()
+        try:
+            fwd_msg = ForwardMsg()
+            fwd_msg.auth_redirect.url = auth_url
+            context.enqueue(fwd_msg)
+            print(f"Streamlit internal redirect initiated to: {auth_url}")
+            
+            # For Edge compatibility, also show a fallback button
+            st.info("🔄 Redirecting to authentication...")
+            st.markdown(f"If redirect doesn't work automatically, [**click here**]({auth_url})")
+            return
+        except Exception as e:
+            print(f"ForwardMsg redirect failed: {e}")
+    
+    # Method 2: Enhanced meta refresh with JavaScript fallback (for Edge)
+    st.markdown(f"""
+    <script>
+        // Immediate JavaScript redirect (works better in Edge)
+        window.location.href = "{auth_url}";
+    </script>
+    <meta http-equiv="refresh" content="1; URL={auth_url}">
+    """, unsafe_allow_html=True)
+    
+    # Method 3: User-clickable fallback
+    st.info("🔄 Redirecting to authentication...")
+    st.markdown(f"**If redirect doesn't work, [click here to login]({auth_url})**")
+    
+    # Stop execution to prevent further processing
+    st.stop()
 
 def secure_silent_login_and_get_user_info(app_name: str) -> Dict[str, Any]:
     """
