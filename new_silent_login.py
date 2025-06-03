@@ -113,38 +113,27 @@ def generate_streamlit_login_url(provider: str = "default") -> str:
 
 def secure_redirect_to_auth(auth_url: str) -> None:
     """
-    Use the exact same redirect mechanism as st.login().
-    
-    The key insight: if st.login() works in Edge, then our ForwardMsg approach should too.
-    The issue might be subtle differences in how we construct or enqueue the message.
+    Attempt a robust client-side redirect, prioritizing JavaScript.
+    This aims to be as browser-agnostic as possible.
     """
-    context = get_script_run_ctx()
-    if context is not None:
-        try:
-            # Create ForwardMsg exactly like st.login() does
-            fwd_msg = ForwardMsg()
-            fwd_msg.auth_redirect.url = auth_url
-            context.enqueue(fwd_msg)
-            print(f"Auth redirect initiated to: {auth_url}")
-            
-            # Don't show any UI elements that might interfere
-            # st.login() doesn't show anything, just redirects
-            return
-            
-        except Exception as e:
-            print(f"ForwardMsg redirect failed: {e}")
-    
-    # Fallback: JavaScript redirect (should work in Edge)
-    st.markdown(f"""
-    <script>
-        window.location.replace("{auth_url}");
-    </script>
-    """, unsafe_allow_html=True)
-    
-    # Minimal UI feedback
-    st.info("🔄 Redirecting to authentication...")
-    
-    # Stop execution
+    # Primary Method: Pure JavaScript redirect
+    # This is generally the most reliable for forcing a browser navigation.
+    js_redirect_script = f'''
+        <script>
+            window.location.replace("{auth_url}");
+        </script>
+    '''
+    st.markdown(js_redirect_script, unsafe_allow_html=True)
+
+    # Display a message to the user while the redirect is happening.
+    # This also acts as a visual cue if the script somehow fails.
+    st.info("🔄 Redirecting to authentication... Please wait.")
+    st.markdown(f"If you are not redirected automatically, [please click here to continue]({auth_url}).")
+
+    # Ensure Streamlit stops processing.
+    # This needs to happen *after* the markdown has been sent to the browser.
+    # A small delay might help ensure the JS has a chance to execute in some environments.
+    time.sleep(0.1)  # Small delay to help ensure JS execution
     st.stop()
 
 def secure_silent_login_and_get_user_info(app_name: str) -> Dict[str, Any]:
