@@ -10,6 +10,9 @@ import streamlit as st
 # Import Streamlit's internal components for proper redirects
 from streamlit.proto.ForwardMsg_pb2 import ForwardMsg
 from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
+from streamlit.auth_util import encode_provider_token
+from streamlit import config
+from streamlit.url_util import make_url_path
 
 # Import the secure OAuth components
 from secure_auth_app import (
@@ -100,42 +103,48 @@ def extract_user_data_from_userinfo(user_info: Dict[str, Any]) -> Dict[str, Any]
         'team_id': user_info.get('rc_local_sigle') or user_info.get('department'),
     }
 
+def generate_streamlit_login_url(provider: str = "default") -> str:
+    """Generate Streamlit's internal login URL (same as st.login() uses)."""
+    AUTH_LOGIN_ENDPOINT = "/auth/login"
+    provider_token = encode_provider_token(provider)
+    base_path = config.get_option("server.baseUrlPath")
+    login_path = make_url_path(base_path, AUTH_LOGIN_ENDPOINT)
+    return f"{login_path}?provider={provider_token}"
+
 def secure_redirect_to_auth(auth_url: str) -> None:
     """
-    Cross-browser compatible redirect to authentication URL.
+    Use the exact same redirect mechanism as st.login().
     
-    Uses multiple fallback mechanisms to ensure compatibility with Edge and other browsers.
+    The key insight: if st.login() works in Edge, then our ForwardMsg approach should too.
+    The issue might be subtle differences in how we construct or enqueue the message.
     """
-    # Method 1: Try Streamlit's internal mechanism first (works in Firefox)
     context = get_script_run_ctx()
     if context is not None:
         try:
+            # Create ForwardMsg exactly like st.login() does
             fwd_msg = ForwardMsg()
             fwd_msg.auth_redirect.url = auth_url
             context.enqueue(fwd_msg)
-            print(f"Streamlit internal redirect initiated to: {auth_url}")
+            print(f"Auth redirect initiated to: {auth_url}")
             
-            # For Edge compatibility, also show a fallback button
-            st.info("🔄 Redirecting to authentication...")
-            st.markdown(f"If redirect doesn't work automatically, [**click here**]({auth_url})")
+            # Don't show any UI elements that might interfere
+            # st.login() doesn't show anything, just redirects
             return
+            
         except Exception as e:
             print(f"ForwardMsg redirect failed: {e}")
     
-    # Method 2: Enhanced meta refresh with JavaScript fallback (for Edge)
+    # Fallback: JavaScript redirect (should work in Edge)
     st.markdown(f"""
     <script>
-        // Immediate JavaScript redirect (works better in Edge)
-        window.location.href = "{auth_url}";
+        window.location.replace("{auth_url}");
     </script>
-    <meta http-equiv="refresh" content="1; URL={auth_url}">
     """, unsafe_allow_html=True)
     
-    # Method 3: User-clickable fallback
+    # Minimal UI feedback
     st.info("🔄 Redirecting to authentication...")
-    st.markdown(f"**If redirect doesn't work, [click here to login]({auth_url})**")
     
-    # Stop execution to prevent further processing
+    # Stop execution
     st.stop()
 
 def secure_silent_login_and_get_user_info(app_name: str) -> Dict[str, Any]:
@@ -278,8 +287,8 @@ def secure_silent_login_and_get_user_info(app_name: str) -> Dict[str, Any]:
                     'scopes': scopes
                 })
                 
-                # Use Streamlit's proper redirect mechanism (same as st.login())
-                secure_redirect_to_auth(auth_url)
+                # Use the exact same redirect mechanism as st.login()
+                secure_redirect_to_auth(auth_url=auth_url)
                 
         except Exception as e:
             print(f"Error initiating OAuth flow: {e}")
