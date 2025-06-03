@@ -17,6 +17,10 @@ from authlib.integrations.requests_client import OAuth2Session
 from authlib.oauth2.rfc6749 import OAuth2Token
 from authlib.oidc.core import CodeIDToken
 
+# Import Streamlit's internal components for proper redirects
+from streamlit.proto.ForwardMsg_pb2 import ForwardMsg
+from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
+
 # Secure in-memory session storage
 class SecureSessionStore:
     """Secure in-memory session storage with automatic cleanup."""
@@ -394,6 +398,21 @@ class SecureAuthenticatedUser:
 # Create global user instance
 secure_user = SecureAuthenticatedUser()
 
+def secure_redirect_to_auth_url(auth_url: str) -> None:
+    """
+    Securely redirect to authentication URL using Streamlit's internal mechanism.
+    
+    This uses the same approach as st.login() instead of meta refresh tags.
+    """
+    context = get_script_run_ctx()
+    if context is not None:
+        fwd_msg = ForwardMsg()
+        fwd_msg.auth_redirect.url = auth_url
+        context.enqueue(fwd_msg)
+    else:
+        # Fallback for edge cases
+        st.markdown(f'<meta http-equiv="refresh" content="0; URL={auth_url}">', unsafe_allow_html=True)
+
 def init_oauth_flow(provider_config: Dict[str, str]) -> str:
     """Initialize OAuth flow and return authorization URL."""
     oauth_manager = SecureOAuthManager(
@@ -560,7 +579,7 @@ def render_login_page():
                         'redirect_uri': auth_config['redirect_uri'],
                         'scopes': scopes
                     })
-                    st.markdown(f'<meta http-equiv="refresh" content="0; URL={auth_url}">', unsafe_allow_html=True)
+                    secure_redirect_to_auth_url(auth_url)
                 except Exception as e:
                     st.error(f"Failed to initialize OAuth: {e}")
                     st.error("Please check your OAuth configuration in secrets.toml")

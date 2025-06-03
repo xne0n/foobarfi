@@ -7,6 +7,10 @@ from database import engine_postgres
 from sqlalchemy import text
 import streamlit as st
 
+# Import Streamlit's internal components for proper redirects
+from streamlit.proto.ForwardMsg_pb2 import ForwardMsg
+from streamlit.runtime.scriptrunner_utils.script_run_context import get_script_run_ctx
+
 # Import the secure OAuth components
 from secure_auth_app import (
     session_store, 
@@ -95,6 +99,24 @@ def extract_user_data_from_userinfo(user_info: Dict[str, Any]) -> Dict[str, Any]
         'email_address': user_info.get('mail') or user_info.get('email'),
         'team_id': user_info.get('rc_local_sigle') or user_info.get('department'),
     }
+
+def secure_redirect_to_auth(auth_url: str) -> None:
+    """
+    Securely redirect to authentication URL using Streamlit's internal mechanism.
+    
+    This uses the same approach as st.login() instead of meta refresh tags.
+    """
+    context = get_script_run_ctx()
+    if context is not None:
+        fwd_msg = ForwardMsg()
+        fwd_msg.auth_redirect.url = auth_url
+        context.enqueue(fwd_msg)
+        print(f"Secure redirect initiated to: {auth_url}")
+    else:
+        print("Warning: No script run context, falling back to meta refresh")
+        st.markdown(f'<meta http-equiv="refresh" content="0; URL={auth_url}">', unsafe_allow_html=True)
+        st.info("🔄 Redirecting to authentication...")
+        st.stop()
 
 def secure_silent_login_and_get_user_info(app_name: str) -> Dict[str, Any]:
     """
@@ -236,10 +258,8 @@ def secure_silent_login_and_get_user_info(app_name: str) -> Dict[str, Any]:
                     'scopes': scopes
                 })
                 
-                # Redirect user to OAuth provider
-                st.markdown(f'<meta http-equiv="refresh" content="0; URL={auth_url}">', unsafe_allow_html=True)
-                st.info("🔄 Redirecting to authentication...")
-                st.stop()
+                # Use Streamlit's proper redirect mechanism (same as st.login())
+                secure_redirect_to_auth(auth_url)
                 
         except Exception as e:
             print(f"Error initiating OAuth flow: {e}")
